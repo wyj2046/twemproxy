@@ -77,6 +77,7 @@ nc_daemonize(int dump_core)
     pid_t pid, sid;
     int fd;
 
+    // 父进程终止
     pid = fork();
     switch (pid) {
     case -1:
@@ -91,8 +92,10 @@ nc_daemonize(int dump_core)
         _exit(0);
     }
 
+    // 第一个子进程继续同时变为会话的领导
     /* 1st child continues and becomes the session leader */
 
+    // TODO 为什么要setsid?
     sid = setsid();
     if (sid < 0) {
         log_error("setsid() failed: %s", strerror(errno));
@@ -104,6 +107,7 @@ nc_daemonize(int dump_core)
         return NC_ERROR;
     }
 
+    // 第一个子进程终止
     pid = fork();
     switch (pid) {
     case -1:
@@ -118,10 +122,13 @@ nc_daemonize(int dump_core)
         _exit(0);
     }
 
+    // 第二个建立的子进程继续运行
     /* 2nd child continues */
 
     /* change working directory */
+    // 这个if语句应该一直不会执行到, 从调用函数传来的dump_core为1
     if (dump_core == 0) {
+        // TODO 为什么要chdir?
         status = chdir("/");
         if (status < 0) {
             log_error("chdir(\"/\") failed: %s", strerror(errno));
@@ -132,6 +139,7 @@ nc_daemonize(int dump_core)
     /* clear file mode creation mask */
     umask(0);
 
+    // 重定向stdin, stdout, stderr到/dev/null
     /* redirect stdin, stdout and stderr to "/dev/null" */
 
     fd = open("/dev/null", O_RDWR);
@@ -469,11 +477,13 @@ nc_pre_run(struct instance *nci)
 {
     rstatus_t status;
 
+    // 初始化日志
     status = log_init(nci->log_level, nci->log_filename);
     if (status != NC_OK) {
         return status;
     }
 
+    // 如果命令行参数指定-d选项, 则以daemon进程启动
     if (daemonize) {
         status = nc_daemonize(1);
         if (status != NC_OK) {
@@ -483,11 +493,13 @@ nc_pre_run(struct instance *nci)
 
     nci->pid = getpid();
 
+    // 初始化信号
     status = signal_init();
     if (status != NC_OK) {
         return status;
     }
 
+    // 如果命令行参数指定了pid文件(-p选项), 则创建pid文件
     if (nci->pid_filename) {
         status = nc_create_pidfile(nci);
         if (status != NC_OK) {
@@ -495,6 +507,7 @@ nc_pre_run(struct instance *nci)
         }
     }
 
+    // 显示一些无关紧要的东西
     nc_print_run(nci);
 
     return NC_OK;
@@ -503,14 +516,17 @@ nc_pre_run(struct instance *nci)
 static void
 nc_post_run(struct instance *nci)
 {
+    // 如果有pid文件, 则删除
     if (nci->pidfile) {
         nc_remove_pidfile(nci);
     }
 
+    // 信号终止
     signal_deinit();
 
     nc_print_done();
 
+    // 日志终止
     log_deinit();
 }
 
@@ -520,12 +536,14 @@ nc_run(struct instance *nci)
     rstatus_t status;
     struct context *ctx;
 
+    // 启动core, 初始化context结构体
     ctx = core_start(nci);
     if (ctx == NULL) {
         return;
     }
 
     /* run rabbit run */
+    // 无限循环core
     for (;;) {
         status = core_loop(ctx);
         if (status != NC_OK) {
@@ -533,17 +551,22 @@ nc_run(struct instance *nci)
         }
     }
 
+    // 终止core
     core_stop(ctx);
 }
 
 int
 main(int argc, char **argv)
 {
+    // 返回类型 typedef int rstatus_t
     rstatus_t status;
+    // nci表示一个nutcracker实例
     struct instance nci;
 
+    // 用默认值填充nci结构体
     nc_set_default_options(&nci);
 
+    // 通过命令行参数值填充nci结构体
     status = nc_get_options(argc, argv, &nci);
     if (status != NC_OK) {
         nc_show_usage();
@@ -563,6 +586,9 @@ main(int argc, char **argv)
         exit(0);
     }
 
+    // 通过命令行-t参数测试配置文件语法是否正确
+    // 注意, 在测试前要先指定配置文件
+    // eg: ./nutcracker -c ../conf/nutcracker.yml -t
     if (test_conf) {
         if (!nc_test_conf(&nci)) {
             exit(1);
@@ -570,14 +596,17 @@ main(int argc, char **argv)
         exit(0);
     }
 
+    // nc启动前的工作(初始化日志, 初始化信号, 是否以daemon进程启动, 创建pid文件)
     status = nc_pre_run(&nci);
     if (status != NC_OK) {
         nc_post_run(&nci);
         exit(1);
     }
 
+    // 真正开始启动nc, 通过调用nc_core.h里的函数完成
     nc_run(&nci);
 
+    // nc善后工作, 有pid文件则删除, 信号终止, 日志终止
     nc_post_run(&nci);
 
     exit(1);
